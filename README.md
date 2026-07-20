@@ -167,7 +167,7 @@ cmd.exe, with `picotool.exe` on PATH (or give its full path):
 
 ```cmd
 picotool load build-rp2350\src\doom_tiny.uf2
-picotool load -v -t bin doom1.whx -o 0x10040000
+picotool load -v -t bin doom1.whx -o 0x10048000
 picotool reboot
 ```
 
@@ -181,17 +181,35 @@ What each step does:
    firmware (engine + your gamepad/haptic/display code) into flash. The
    `.uf2` file already embeds its own target address (`0x10000000`), so no
    `-o` offset is needed here.
-3. `picotool load -v -t bin doom1.whx -o 0x10040000` — writes the shareware
+3. `picotool load -v -t bin doom1.whx -o 0x10048000` — writes the shareware
    WAD as a second, separate flash write at a **fixed** address
-   (`0x10040000`), because the engine reads level/asset data straight out of
-   flash via XIP (memory-mapped execute-in-place) instead of loading it into
-   RAM. `-t bin` tells picotool this file is a raw binary blob (not
-   ELF/UF2), which is why an explicit `-o` address is required. `-v` reads
-   the flash back afterward and compares it to the file, failing loudly if
-   anything didn't write correctly.
+   (`0x10048000`, `TINY_WAD_ADDR` in `src/CMakeLists.txt` — was `0x10040000`
+   until 2026-07-19, see the warning below), because the engine reads
+   level/asset data straight out of flash via XIP (memory-mapped
+   execute-in-place) instead of loading it into RAM. `-t bin` tells picotool
+   this file is a raw binary blob (not ELF/UF2), which is why an explicit
+   `-o` address is required. `-v` reads the flash back afterward and
+   compares it to the file, failing loudly if anything didn't write
+   correctly.
 4. `picotool reboot` — exits BOOTSEL mode and starts running the
    newly-flashed firmware, equivalent to a power-cycle but done over USB
    without touching the board.
+
+**⚠️ Firmware-size vs. WAD-address collision:** `TINY_WAD_ADDR` is a
+*fixed* flash address, but the firmware image is *not* fixed size — it
+grows as you add code. If `doom_tiny.bin` ever grows past
+`TINY_WAD_ADDR - 0x10000000` (currently 288 KB), flashing the firmware
+silently overwrites the start of the WAD with firmware tail bytes,
+corrupting its "IWHX" header. Symptom: boots to a white/blank screen with
+no obvious cause, or (with UART attached) `*** PANIC *** No WXD at
+0x10048000` from `W_Init`. This isn't hypothetical - it happened for real
+on 2026-07-19: a HUD feature pushed the binary from exactly `0x40000`
+bytes to `0x40148`, 328 bytes past the *old* `0x10040000` boundary, and
+cost hours of misdirected hardware debugging before the actual cause
+turned up in a UART capture. Check `build-rp2350/src/doom_tiny.bin`'s size
+against the budget below after any size-relevant change; if it's close,
+either trim code or bump `TINY_WAD_ADDR` further out in `src/CMakeLists.txt`
+(and reflash the WAD to the new address).
 
 **Iteration tip:** once the WAD has been loaded once, it persists in flash
 across reboots and reflashes — only reload it if `doom1.whx` itself changes.
@@ -202,7 +220,7 @@ Day-to-day firmware iteration is just step 2 + step 4 (put back in BOOTSEL,
 already verifies the firmware by default, but to double check either write
 without touching hardware, put the board in BOOTSEL and run
 `picotool verify build-rp2350\src\doom_tiny.uf2` and
-`picotool verify -t bin doom1.whx -o 0x10040000` — both must print `OK`. A
+`picotool verify -t bin doom1.whx -o 0x10048000` — both must print `OK`. A
 board whose WAD was never loaded will show the write region as all `0xff`
 (erased flash) instead of matching the file.
 
@@ -212,8 +230,7 @@ board whose WAD was never loaded will show the write region as all `0xff`
 |---|---|
 | Up/Down/Left/Right | Move / turn |
 | A | Fire; also confirms menu selections |
-| B | Use (open doors, switches) |
-| Select (hold) | Strafe + run modifier — hold while moving |
+| B | Use (open doors, switches); also a strafe + run modifier — hold it while moving instead of tapping it alone |
 | Select (hold alone, no direction, 0.5s) | Next weapon |
 | Select + B | Previous weapon |
 | Start | Escape (open/close menu) |
